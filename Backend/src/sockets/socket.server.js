@@ -4,6 +4,7 @@ const cookie = require('cookie');
 const jwt = require('jsonwebtoken');
 const userModel = require("../models/user.model");
 const aiService = require("../services/ai.service");
+const messageModel = require("../models/message.model");
 
 
 function initSocketServer(httpServer) {
@@ -18,10 +19,9 @@ function initSocketServer(httpServer) {
         }
         try {
             const decoded = jwt.verify(cookies.token, process.env.JWT_SECRET);
-            const user = await userModel.findById(decoded.id);
-
+            // Use decoded.userId instead of decoded.id
+            const user = await userModel.findById(decoded.userId);
             socket.user = user;
-
             next();
         } catch (error) {
             next(new Error("Authentication error: Invalid token"));
@@ -44,12 +44,51 @@ function initSocketServer(httpServer) {
             */
 
             console.log(messagePayload);
+            // Check if socket.user is set
+            if (!socket.user) {
+                console.error("Socket user is null. Authentication failed or user not found.");
+                return socket.emit('error', { message: 'User not authenticated' });
+            }
 
-            const response = await aiService.generateResponse(messagePayload.content);
+            // ham message ko database me store karenge  USER KA MESSAGE HONGA
+            await messageModel.create({
+                chat: messagePayload.chat,
+                user: socket.user._id,
+                content: messagePayload.content,
+                role: 'user'
+            });
+
+
+            // ab ham chat history ko fetch karenge jis user me pahle kiya honga pahle ham usko padenge fir response generate karenge
+            //ham short term memory ko direct use nhi kar sakte isme restriction hote hai isiliye ham ise array of object me covert karenge jisme mainly do cheeze hongi ek role:'user' aur parts:[{content:message}];
+            //map ka use kiya hai taki sirf role aur content hi aaye
+
+            const chatHistory = (await messageModel.find({
+                chat: messagePayload.chat
+            }).sort({ createdAt: -1 }).limit(10).lean()).reverse();
+            
+
+
+
+            const response = await aiService.generateResponse(chatHistory.map(item => {
+                return {
+                    role: item.role,
+                    parts: [{ text: item.content }]
+                }
+            }));
+         
+            // ab ham ai ka response bhi database me store karenge AI KA RESPONSE HONGA      
+            await messageModel.create({
+                chat: messagePayload.chat,
+                user: socket.user._id, // ai ka response hai isliye null hoga 
+                content: response,
+                role: 'model'
+            });
+
             socket.emit('ai-response', {
                 content: response,
                 Chat: messagePayload.Chat
-            })
+            });
         })
     });
 
