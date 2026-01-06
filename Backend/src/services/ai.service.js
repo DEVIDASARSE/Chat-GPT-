@@ -13,6 +13,22 @@ async function generateResponse(content) {
     return response.text;
 }
 
+
+//embedding generate karne ke liye bhi ai service chahiye hogi jise ham yaha per add karenge
+
+async function generateVector(content){
+
+    const response = await ai.models.embedContent({
+        model: 'gemini-embedding-001',
+        contents: content,
+        config:{
+            outputDimensionality:768
+        }
+    })
+    return response.embeddings[0].values; // Return the vector values   
+}
+
 module.exports = {  
-    generateResponse
+    generateResponse,
+    generateVector
 };

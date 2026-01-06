@@ -5,6 +5,8 @@ const jwt = require('jsonwebtoken');
 const userModel = require("../models/user.model");
 const aiService = require("../services/ai.service");
 const messageModel = require("../models/message.model");
+const { createMemory, queryMemory } = require("../services/vector.service");
+// const { chat } = require("@pinecone-database/pinecone/dist/assistant/data/chat");
 
 
 function initSocketServer(httpServer) {
@@ -50,14 +52,37 @@ function initSocketServer(httpServer) {
                 return socket.emit('error', { message: 'User not authenticated' });
             }
 
-            // ham message ko database me store karenge  USER KA MESSAGE HONGA
-            await messageModel.create({
+            // ham message ko database me store karenge  USER KA MESSAGE HONGA (input message)
+            const message = await messageModel.create({
                 chat: messagePayload.chat,
                 user: socket.user._id,
                 content: messagePayload.content,
                 role: 'user'
             });
 
+
+            //user yaha per jo bhi message use ham memory ke ander save karenge uske vector banayenge {createMemory, queryMemory}  isme se createMemory use karenge use ke input pe
+            const vectors = await aiService.generateVector(messagePayload.content);
+
+            const memory = await queryMemory({
+                queryVector: vectors,
+                limit: 2,
+                metadata: {}
+            });
+
+            await createMemory({
+                vectors: vectors,
+                messageId: message._id, // You can use a UUID or any unique identifier
+                metadata: {
+                    chatId: messagePayload.chat,
+                    user: socket.user._id,
+                    text: messagePayload.content// additional metadata if needed
+                }
+            });
+
+
+
+            console.log(memory);
 
             // ab ham chat history ko fetch karenge jis user me pahle kiya honga pahle ham usko padenge fir response generate karenge
             //ham short term memory ko direct use nhi kar sakte isme restriction hote hai isiliye ham ise array of object me covert karenge jisme mainly do cheeze hongi ek role:'user' aur parts:[{content:message}];
@@ -66,7 +91,7 @@ function initSocketServer(httpServer) {
             const chatHistory = (await messageModel.find({
                 chat: messagePayload.chat
             }).sort({ createdAt: -1 }).limit(10).lean()).reverse();
-            
+
 
 
 
@@ -76,14 +101,27 @@ function initSocketServer(httpServer) {
                     parts: [{ text: item.content }]
                 }
             }));
-         
-            // ab ham ai ka response bhi database me store karenge AI KA RESPONSE HONGA      
-            await messageModel.create({
+
+            // ab ham ai ka response bhi database me store karenge AI KA RESPONSE HONGA  (output message)    
+            const responseMessage = await messageModel.create({
                 chat: messagePayload.chat,
                 user: socket.user._id, // ai ka response hai isliye null hoga 
                 content: response,
                 role: 'model'
             });
+
+
+
+            const responseVectors = await aiService.generateVector(response);
+            await createMemory({
+                vectors: responseVectors,
+                messageId: responseMessage._id, // Corrected key
+                metadata: {
+                    chatId: messagePayload.chat,
+                    user: socket.user._id,
+                    text: response // additional metadata if needed
+                }
+            })
 
             socket.emit('ai-response', {
                 content: response,
