@@ -67,7 +67,9 @@ function initSocketServer(httpServer) {
             const memory = await queryMemory({
                 queryVector: vectors,
                 limit: 2,
-                metadata: {}
+                metadata: {
+                    user: socket.user._id,// user se related hi memory chahiye
+                }
             });
 
             await createMemory({
@@ -82,7 +84,7 @@ function initSocketServer(httpServer) {
 
 
 
-            console.log(memory);
+            
 
             // ab ham chat history ko fetch karenge jis user me pahle kiya honga pahle ham usko padenge fir response generate karenge
             //ham short term memory ko direct use nhi kar sakte isme restriction hote hai isiliye ham ise array of object me covert karenge jisme mainly do cheeze hongi ek role:'user' aur parts:[{content:message}];
@@ -93,14 +95,30 @@ function initSocketServer(httpServer) {
             }).sort({ createdAt: -1 }).limit(10).lean()).reverse();
 
 
-
-
-            const response = await aiService.generateResponse(chatHistory.map(item => {
+            const stm = chatHistory.map(item => {
                 return {
                     role: item.role,
                     parts: [{ text: item.content }]
                 }
-            }));
+            })
+
+            const ltm = [
+                {
+                    role: 'user',
+                    parts: [{text: `
+                        
+                        these are some previous message from the chat, use them to generate response
+
+                        ${memory.map(item => item.metadata.text).join('\n')}
+
+                        `}]
+                }
+            ]
+           
+            console.log(ltm[ 0 ]);
+            console.log(stm);
+            // ab ham ai se response generate karenge
+            const response = await aiService.generateResponse([ ...ltm, ...stm]);
 
             // ab ham ai ka response bhi database me store karenge AI KA RESPONSE HONGA  (output message)    
             const responseMessage = await messageModel.create({
