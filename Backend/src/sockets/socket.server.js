@@ -52,47 +52,46 @@ function initSocketServer(httpServer) {
                 return socket.emit('error', { message: 'User not authenticated' });
             }
 
-            // ham message ko database me store karenge  USER KA MESSAGE HONGA (input message)
-            const message = await messageModel.create({
-                chat: messagePayload.chat,
-                user: socket.user._id,
-                content: messagePayload.content,
-                role: 'user'
-            });
 
+            //MESSAGE AUR VECTOR AND CREATE MEMORY THREE KO EK SATH  BANANE HAI ISILIYE PROMISE.ALL KA USE KIYA HAI TAKI DONO EK SAATH BAN JAYE
+            const [message, vectors] = await Promise.all([
+                messageModel.create({
+                    chat: messagePayload.chat,
+                    user: socket.user._id,
+                    content: messagePayload.content,
+                    role: 'user'
+                }),
+                aiService.generateVector(messagePayload.content)
+            ]);
 
-            //user yaha per jo bhi message use ham memory ke ander save karenge uske vector banayenge {createMemory, queryMemory}  isme se createMemory use karenge use ke input pe
-            const vectors = await aiService.generateVector(messagePayload.content);
-
-            const memory = await queryMemory({
-                queryVector: vectors,
-                limit: 2,
-                metadata: {
-                    user: socket.user._id,// user se related hi memory chahiye
-                }
-            });
 
             await createMemory({
-                vectors: vectors,
-                messageId: message._id, // You can use a UUID or any unique identifier
+                vectors,
+                messageId: message._id, // Corrected key
                 metadata: {
-                    chatId: messagePayload.chat,
+                    chat: messagePayload.chat,
                     user: socket.user._id,
-                    text: messagePayload.content// additional metadata if needed
+                    text: messagePayload.content // additional metadata if needed
                 }
-            });
+            })
+
+            // ab ham memory aur chat history dono ko ek sath le kar aayenge kyoki hamai dono ki jarurat padegi ai se response generate karne ke liye sath hi sath ham limit bhi laga denge taki jyada data na aaye aur performance pr effect na pade
+            const [memory, chatHistory] = await Promise.all([
+
+                queryMemory({
+                    queryVector: vectors,
+                    limit: 2,
+                    metadata: {
+                        user: socket.user._id,// user se related hi memory chahiye
+                    }
+                }),
+                messageModel.find({
+                    chat: messagePayload.chat
+                }).sort({ createdAt: -1 }).limit(10).lean().then(messages => messages.reverse())
+
+            ])
 
 
-
-            
-
-            // ab ham chat history ko fetch karenge jis user me pahle kiya honga pahle ham usko padenge fir response generate karenge
-            //ham short term memory ko direct use nhi kar sakte isme restriction hote hai isiliye ham ise array of object me covert karenge jisme mainly do cheeze hongi ek role:'user' aur parts:[{content:message}];
-            //map ka use kiya hai taki sirf role aur content hi aaye
-
-            const chatHistory = (await messageModel.find({
-                chat: messagePayload.chat
-            }).sort({ createdAt: -1 }).limit(10).lean()).reverse();
 
 
             const stm = chatHistory.map(item => {
@@ -105,7 +104,8 @@ function initSocketServer(httpServer) {
             const ltm = [
                 {
                     role: 'user',
-                    parts: [{text: `
+                    parts: [{
+                        text: `
                         
                         these are some previous message from the chat, use them to generate response
 
@@ -114,37 +114,40 @@ function initSocketServer(httpServer) {
                         `}]
                 }
             ]
-           
-            console.log(ltm[ 0 ]);
-            console.log(stm);
+
+            // console.log(ltm[ 0 ]);
+            // console.log(stm);
             // ab ham ai se response generate karenge
-            const response = await aiService.generateResponse([ ...ltm, ...stm]);
-
-            // ab ham ai ka response bhi database me store karenge AI KA RESPONSE HONGA  (output message)    
-            const responseMessage = await messageModel.create({
-                chat: messagePayload.chat,
-                user: socket.user._id, // ai ka response hai isliye null hoga 
-                content: response,
-                role: 'model'
-            });
-
-
-
-            const responseVectors = await aiService.generateVector(response);
-            await createMemory({
-                vectors: responseVectors,
-                messageId: responseMessage._id, // Corrected key
-                metadata: {
-                    chatId: messagePayload.chat,
-                    user: socket.user._id,
-                    text: response // additional metadata if needed
-                }
-            })
+            const response = await aiService.generateResponse([...ltm, ...stm]);
 
             socket.emit('ai-response', {
                 content: response,
                 Chat: messagePayload.Chat
             });
+
+            // ab ham respnsemessage aur responsevectors ko ek sath banayenge
+            const [responseMessage, responseVectors] = await Promise.all([
+                messageModel.create({
+                    chat: messagePayload.chat,
+                    user: socket.user._id,
+                    content: response,
+                    role: 'model'
+                }),
+                aiService.generateVector(response)
+            ]);
+
+            await createMemory({
+                vectors: responseVectors,
+                messageId: responseMessage._id, // Corrected key
+                metadata: {
+                    chat: messagePayload.chat,
+                    user: socket.user._id,
+                    text: response // additional metadata if needed
+                }
+
+
+            });
+
         })
     });
 
